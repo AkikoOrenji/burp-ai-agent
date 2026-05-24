@@ -21,12 +21,13 @@ class MontoyaHttpTransport(
         jsonBody: String,
         timeoutMs: Long = 120_000,
     ): TransportResponse {
+        val bodyBytes = burp.api.montoya.core.ByteArray.byteArray(jsonBody.toByteArray(Charsets.UTF_8))
         var request =
             HttpRequest
                 .httpRequestFromUrl(url)
                 .withMethod("POST")
-                .withBody(jsonBody)
-                .withAddedHeader("Content-Type", "application/json")
+                .withBody(bodyBytes)
+                .withAddedHeader("Content-Type", "application/json; charset=utf-8")
         headers.forEach { (name, value) ->
             request = request.withAddedHeader(name, value)
         }
