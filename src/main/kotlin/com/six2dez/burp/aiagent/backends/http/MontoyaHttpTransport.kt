@@ -1,6 +1,7 @@
 package com.six2dez.burp.aiagent.backends.http
 
 import burp.api.montoya.MontoyaApi
+import burp.api.montoya.http.HttpMode
 import burp.api.montoya.http.RequestOptions
 import burp.api.montoya.http.HttpService
 import burp.api.montoya.http.message.requests.HttpRequest
@@ -85,10 +86,18 @@ class MontoyaHttpTransport(
         val options =
             RequestOptions
                 .requestOptions()
+                .withHttpMode(HttpMode.HTTP_1)
                 .withUpstreamTLSVerification()
                 .withResponseTimeout(timeoutMs)
-        val result = api.http().sendRequest(request, options)
-        return decodeResponse(result.response())
+        return try {
+            val result = api.http().sendRequest(request, options)
+            decodeResponse(result.response())
+        } catch (e: Exception) {
+            val service = runCatching { request.httpService().toString() }.getOrDefault("<unknown-service>")
+            val path = runCatching { request.path() }.getOrDefault("<unknown-path>")
+            api.logging().logToError("[MontoyaHttpTransport] send failed service=$service path=$path mode=HTTP_1: ${e.message}")
+            throw e
+        }
     }
 
     private data class RequestTarget(
