@@ -200,6 +200,7 @@ class OpenAiCompatibleBackend(
                             debugLog("request -> $endpointUrl")
 
                             if (transport != null) {
+                                debugLog("transport -> montoya")
                                 val resp = transport.post(endpointUrl, allHeaders, json, timeoutSeconds * 1000)
                                 if (!resp.isSuccessful) {
                                     errorLog("HTTP ${resp.statusCode}: ${resp.body.take(500)}")
@@ -235,6 +236,7 @@ class OpenAiCompatibleBackend(
                                 onChunk(content)
                                 onComplete(null)
                             } else {
+                                debugLog("transport -> okhttp")
                                 val req =
                                     Request
                                         .Builder()
