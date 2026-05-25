@@ -23,18 +23,10 @@ class MontoyaHttpTransport(
         timeoutMs: Long = 120_000,
     ): TransportResponse {
         val bodyBytes = burp.api.montoya.core.ByteArray.byteArray(*jsonBody.toByteArray(Charsets.UTF_8))
-        // Associate an explicit HttpService with the request so Burp's upstream proxy
-        // settings are applied when the request is sent via Montoya.
-        val uri = java.net.URI(url)
-        val scheme = uri.scheme ?: "http"
-        val host = uri.host ?: uri.authority ?: throw IllegalArgumentException("Invalid URL: $url")
-        val port = if (uri.port == -1) if (scheme.equals("https", ignoreCase = true)) 443 else 80 else uri.port
-        val service = HttpService.httpService(host, port, scheme.equals("https", ignoreCase = true))
+        val target = prepareRequestTarget(url)
         var request =
             HttpRequest
-                .httpRequestFromUrl(url)
-                .withService(service)
-                .withMethod("POST")
+                .httpRequest(target.service, requestTemplate("POST", target))
                 .withBody(bodyBytes)
                 .withAddedHeader("Content-Type", "application/json; charset=utf-8")
         headers.forEach { (name, value) ->
@@ -48,12 +40,8 @@ class MontoyaHttpTransport(
         headers: Map<String, String>,
         timeoutMs: Long = 3_000,
     ): TransportResponse {
-        val uri = java.net.URI(url)
-        val scheme = uri.scheme ?: "http"
-        val host = uri.host ?: uri.authority ?: throw IllegalArgumentException("Invalid URL: $url")
-        val port = if (uri.port == -1) if (scheme.equals("https", ignoreCase = true)) 443 else 80 else uri.port
-        val service = HttpService.httpService(host, port, scheme.equals("https", ignoreCase = true))
-        var request = HttpRequest.httpRequestFromUrl(url).withService(service)
+        val target = prepareRequestTarget(url)
+        var request = HttpRequest.httpRequest(target.service, requestTemplate("GET", target))
         headers.forEach { (name, value) ->
             request = request.withAddedHeader(name, value)
         }
@@ -77,6 +65,19 @@ class MontoyaHttpTransport(
             HealthCheckResult.Unavailable(e.message ?: "Request failed")
         }
 
+    private fun prepareRequestTarget(url: String): RequestTarget {
+        val uri = java.net.URI(url)
+        val scheme = uri.scheme ?: "http"
+        val host = uri.host ?: uri.authority ?: throw IllegalArgumentException("Invalid URL: $url")
+        val usesHttps = scheme.equals("https", ignoreCase = true)
+        val port = if (uri.port == -1) defaultPortForScheme(scheme) else uri.port
+        return RequestTarget(
+            service = HttpService.httpService(host, port, usesHttps),
+            requestTarget = buildOriginFormTarget(uri),
+            hostHeader = buildHostHeader(host, port, usesHttps),
+        )
+    }
+
     private fun execute(
         request: HttpRequest,
         timeoutMs: Long,
@@ -90,7 +91,43 @@ class MontoyaHttpTransport(
         return decodeResponse(result.response())
     }
 
+    private data class RequestTarget(
+        val service: HttpService,
+        val requestTarget: String,
+        val hostHeader: String,
+    )
+
     companion object {
+        internal fun buildOriginFormTarget(uri: java.net.URI): String {
+            val path = uri.rawPath?.ifEmpty { "/" } ?: "/"
+            val query = uri.rawQuery?.let { "?$it" }.orEmpty()
+            return path + query
+        }
+
+        internal fun buildHostHeader(
+            host: String,
+            port: Int,
+            usesHttps: Boolean,
+        ): String {
+            val normalizedHost = normalizeHostHeaderHost(host)
+            val isDefaultPort = port == if (usesHttps) 443 else 80
+            return if (isDefaultPort) normalizedHost else "$normalizedHost:$port"
+        }
+
+        private fun requestTemplate(
+            method: String,
+            target: RequestTarget,
+        ): String = "$method ${target.requestTarget} HTTP/1.1\r\nHost: ${target.hostHeader}\r\n\r\n"
+
+        private fun defaultPortForScheme(scheme: String): Int = if (scheme.equals("https", ignoreCase = true)) 443 else 80
+
+        private fun normalizeHostHeaderHost(host: String): String =
+            if (host.contains(':') && !host.startsWith('[') && !host.endsWith(']')) {
+                "[$host]"
+            } else {
+                host
+            }
+
         // Force UTF-8: Montoya's bodyToString() decodes with the JVM platform charset, which mojibakes
         // multibyte responses (e.g. Chinese, emoji) on hosts whose default charset isn't UTF-8.
         // OpenAI-compatible servers commonly return Content-Type: application/json without an explicit
